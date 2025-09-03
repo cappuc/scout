@@ -5,9 +5,11 @@ namespace Laravel\Scout\Engines;
 use Exception;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\LazyCollection;
 use Laravel\Scout\Builder;
+use Laravel\Scout\Contracts\UpdatesIndexSettings;
 use Laravel\Scout\Exceptions\NotSupportedException;
 use stdClass;
 use Typesense\Client as Typesense;
@@ -16,7 +18,7 @@ use Typesense\Exceptions\ObjectAlreadyExists;
 use Typesense\Exceptions\ObjectNotFound;
 use Typesense\Exceptions\TypesenseClientError;
 
-class TypesenseEngine extends Engine
+class TypesenseEngine extends Engine implements UpdatesIndexSettings
 {
     /**
      * The Typesense client instance.
@@ -588,6 +590,72 @@ class TypesenseEngine extends Engine
     public function createIndex($name, array $options = [])
     {
         throw new NotSupportedException('Typesense indexes are created automatically upon adding objects.');
+    }
+
+    public function updateIndexSettings(string $name, array $settings = [])
+    {
+        $collection = $this->typesense->collections[$name];
+
+        $fieldsPayload = [];
+
+        $currentSettings = $collection->retrieve();
+
+        $currentFields = collect($currentSettings['fields'] ?? [])->keyBy('name');
+        $newFields = collect($settings['collection-schema']['fields'] ?? [])->keyBy('name');
+
+        // Drop fields missing in the new settings.
+        $droppedFields = $currentFields->keys()->diff($newFields->keys());
+        if ($droppedFields->isNotEmpty()) {
+            foreach ($droppedFields as $field) {
+                $fieldsPayload[] = [
+                    'name' => $field,
+                    'drop' => true,
+                ];
+            }
+        }
+
+        // Add or update fields.
+        foreach ($newFields as $name => $fieldSettings) {
+            if ($name === 'id') {
+                continue; // Skip the 'id' field as it cannot be dropped or modified.
+            }
+
+            $oldSettings = $currentFields->get($name);
+
+            // If the field is new, add it to the payload.
+            if ($oldSettings === null) {
+                $fieldsPayload[] = $fieldSettings;
+                continue;
+            }
+
+            // If any setting has changed, drop and re-add the field.
+            foreach ($fieldSettings as $key => $value) {
+                if ($oldSettings[$key] !== $value) {
+                    $fieldsPayload[] = ['name' => $name, 'drop' => true];
+                    $fieldsPayload[] = $fieldSettings;
+                    continue 2;
+                }
+            }
+        }
+
+        if ($fieldsPayload === []) {
+            return;
+        }
+
+        $collection->update([
+            'fields' => $fieldsPayload,
+        ]);
+    }
+
+    public function configureSoftDeleteFilter(array $settings = [])
+    {
+        $settings['collection-schema']['fields'][] = [
+            'name' => '__soft_deleted',
+            'type' => 'int64',
+            'optional' => true,
+        ];
+
+        return $settings;
     }
 
     /**

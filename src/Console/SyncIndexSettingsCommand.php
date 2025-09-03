@@ -25,7 +25,7 @@ class SyncIndexSettingsCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Sync your configured index settings with your search engine (Meilisearch)';
+    protected $description = 'Sync your configured index settings with your search engine';
 
     /**
      * Execute the console command.
@@ -44,7 +44,7 @@ class SyncIndexSettingsCommand extends Command
         }
 
         try {
-            $indexes = (array) config('scout.'.$driver.'.index-settings', []);
+            $indexes = (array) (config('scout.'.$driver.'.index-settings', []) ?: config('scout.'.$driver.'.model-settings', []));
 
             if (count($indexes)) {
                 foreach ($indexes as $name => $settings) {
